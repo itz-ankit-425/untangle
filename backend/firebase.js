@@ -1,5 +1,6 @@
 import { initializeApp, cert } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
+import { getAuth } from "firebase-admin/auth";
 import { readFileSync } from "fs";
 import dotenv from "dotenv";
 dotenv.config();
@@ -18,3 +19,4 @@ initializeApp({
 });
 
 export const db = getFirestore();
+export const auth = getAuth();

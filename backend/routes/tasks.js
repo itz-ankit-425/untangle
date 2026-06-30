@@ -1,21 +1,23 @@
 import express from "express";
 import { extractTasks, refineWithChat, analyzeProcrastination } from "../services/gemini.js";
 import { db } from "../firebase.js";
+import { requireAuth } from "../middleware/auth.js";
 
 const router = express.Router();
+
+router.use(requireAuth);
 
 // POST /api/tasks/extract
 router.post("/extract", async (req, res) => {
   try {
     const { text } = req.body;
     if (!text) return res.status(400).json({ error: "No text provided" });
-    console.log("Extracting tasks from text:", text.substring(0, 50) + "...");
     const tasks = await extractTasks(text);
-    console.log("Tasks extracted:", tasks.length);
     const savedTasks = [];
     for (const task of tasks) {
       const docRef = await db.collection("tasks").add({
         ...task,
+        userId: req.userId,
         createdAt: new Date().toISOString(),
       });
       savedTasks.push({ id: docRef.id, ...task });
@@ -39,10 +41,13 @@ router.post("/chat", async (req, res) => {
   }
 });
 
-// GET /api/tasks
+// GET /api/tasks - only this user's tasks
 router.get("/", async (req, res) => {
   try {
-    const snapshot = await db.collection("tasks").orderBy("createdAt", "desc").get();
+    const snapshot = await db.collection("tasks")
+      .where("userId", "==", req.userId)
+      .orderBy("createdAt", "desc")
+      .get();
     const tasks = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
     res.json({ tasks });
   } catch (err) {
@@ -50,18 +55,19 @@ router.get("/", async (req, res) => {
   }
 });
 
-// PATCH /api/tasks/:id
+// PATCH /api/tasks/:id - verify ownership first
 router.patch("/:id", async (req, res) => {
   try {
     const { id } = req.params;
+    const doc = await db.collection("tasks").doc(id).get();
+    if (!doc.exists || doc.data().userId !== req.userId) {
+      return res.status(403).json({ error: "Not authorized to edit this task" });
+    }
     const updates = req.body;
-
-    // If marking as done, log completion
     if (updates.status === "done") {
       updates.completedAt = new Date().toISOString();
       updates.wasCompleted = true;
     }
-
     await db.collection("tasks").doc(id).update(updates);
     res.json({ success: true });
   } catch (err) {
@@ -69,24 +75,22 @@ router.patch("/:id", async (req, res) => {
   }
 });
 
-// DELETE /api/tasks/:id
+// DELETE /api/tasks/:id - verify ownership first
 router.delete("/:id", async (req, res) => {
   try {
     const { id } = req.params;
-
-    // Log as skipped before deleting
     const doc = await db.collection("tasks").doc(id).get();
-    if (doc.exists) {
-      const task = doc.data();
-      if (task.status !== "done") {
-        await db.collection("skipped_tasks").add({
-          ...task,
-          skippedAt: new Date().toISOString(),
-          wasCompleted: false,
-        });
-      }
+    if (!doc.exists || doc.data().userId !== req.userId) {
+      return res.status(403).json({ error: "Not authorized to delete this task" });
     }
-
+    const task = doc.data();
+    if (task.status !== "done") {
+      await db.collection("skipped_tasks").add({
+        ...task,
+        skippedAt: new Date().toISOString(),
+        wasCompleted: false,
+      });
+    }
     await db.collection("tasks").doc(id).delete();
     res.json({ success: true });
   } catch (err) {
@@ -94,16 +98,16 @@ router.delete("/:id", async (req, res) => {
   }
 });
 
-// POST /api/tasks/analyze - generate procrastination profile
+// POST /api/tasks/analyze - only this user's data
 router.post("/analyze", async (req, res) => {
   try {
-    // Get completed tasks
     const completedSnap = await db.collection("tasks")
+      .where("userId", "==", req.userId)
       .where("wasCompleted", "==", true).get();
     const completed = completedSnap.docs.map(d => d.data());
 
-    // Get skipped tasks
-    const skippedSnap = await db.collection("skipped_tasks").get();
+    const skippedSnap = await db.collection("skipped_tasks")
+      .where("userId", "==", req.userId).get();
     const skipped = skippedSnap.docs.map(d => d.data());
 
     if (completed.length + skipped.length < 3) {
