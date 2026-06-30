@@ -4,7 +4,7 @@ import KanbanBoard from "./components/KanbanBoard";
 import ProfilePanel from "./components/ProfilePanel";
 import NotificationBell from "./components/NotificationBell";
 
-const API = "http://localhost:5000/api/tasks";
+const API = "https://untangle-backend-c21j.onrender.com/api/tasks";
 
 export default function App() {
   const [tasks, setTasks] = useState([]);
