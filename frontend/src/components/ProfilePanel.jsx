@@ -2,7 +2,7 @@ import { useState } from "react";
 
 const API = "http://localhost:5000/api/tasks";
 
-export default function ProfilePanel({ onClose }) {
+export default function ProfilePanel({ onClose, authHeader }) {
   const [loading, setLoading] = useState(false);
   const [profile, setProfile] = useState(null);
   const [error, setError] = useState(null);
@@ -11,7 +11,8 @@ export default function ProfilePanel({ onClose }) {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${API}/analyze`, { method: "POST" });
+      const headers = authHeader ? await authHeader() : {};
+      const res = await fetch(`${API}/analyze`, { method: "POST", headers });
       const data = await res.json();
       if (typeof data.analysis === "string") {
         setError(data.analysis);

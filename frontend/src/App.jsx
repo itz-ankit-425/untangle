@@ -3,28 +3,50 @@ import ChatPanel from "./components/ChatPanel";
 import KanbanBoard from "./components/KanbanBoard";
 import ProfilePanel from "./components/ProfilePanel";
 import NotificationBell from "./components/NotificationBell";
+import Login from "./components/Login";
+import { watchAuthState, logout } from "./firebase.js";
 
 const API = "https://untangle-backend-c21j.onrender.com/api/tasks";
 
 export default function App() {
+  const [user, setUser] = useState(undefined); // undefined = checking, null = logged out
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(false);
   const [calendarToken, setCalendarToken] = useState(null);
   const [showProfile, setShowProfile] = useState(false);
   const [loadingTasks, setLoadingTasks] = useState(true);
 
+  // Watch auth state
   useEffect(() => {
-    fetch(API)
-      .then(r => r.json())
-      .then(d => { setTasks(d.tasks || []); setLoadingTasks(false); })
-      .catch(() => setLoadingTasks(false));
+    const unsub = watchAuthState((u) => setUser(u));
+    return () => unsub();
   }, []);
+
+  // Get a fresh ID token for API calls
+  async function authHeader() {
+    if (!user) return {};
+    const token = await user.getIdToken();
+    return { Authorization: `Bearer ${token}` };
+  }
+
+  // Load tasks once logged in
+  useEffect(() => {
+    if (!user) return;
+    setLoadingTasks(true);
+    authHeader().then(headers => {
+      fetch(API, { headers })
+        .then(r => r.json())
+        .then(d => { setTasks(d.tasks || []); setLoadingTasks(false); })
+        .catch(() => setLoadingTasks(false));
+    });
+  }, [user]);
 
   async function handleExtract(text) {
     setLoading(true);
     try {
+      const headers = await authHeader();
       const res = await fetch(`${API}/extract`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json", ...headers },
         body: JSON.stringify({ text }),
       });
       const data = await res.json();
@@ -37,8 +59,9 @@ export default function App() {
   async function handleChat(message) {
     setLoading(true);
     try {
+      const headers = await authHeader();
       const res = await fetch(`${API}/chat`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json", ...headers },
         body: JSON.stringify({ message, currentTasks: tasks }),
       });
       const data = await res.json();
@@ -49,25 +72,42 @@ export default function App() {
 
   async function handleStatusChange(taskId, newStatus) {
     setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: newStatus } : t));
+    const headers = await authHeader();
     await fetch(`${API}/${taskId}`, {
-      method: "PATCH", headers: { "Content-Type": "application/json" },
+      method: "PATCH", headers: { "Content-Type": "application/json", ...headers },
       body: JSON.stringify({ status: newStatus }),
     });
   }
 
   async function handleDelete(taskId) {
     setTasks(prev => prev.filter(t => t.id !== taskId));
-    await fetch(`${API}/${taskId}`, { method: "DELETE" });
+    const headers = await authHeader();
+    await fetch(`${API}/${taskId}`, { method: "DELETE", headers });
   }
 
   async function handleClearAll() {
     if (!confirm("Clear all tasks?")) return;
-    for (const t of tasks) await fetch(`${API}/${t.id}`, { method: "DELETE" });
+    const headers = await authHeader();
+    for (const t of tasks) await fetch(`${API}/${t.id}`, { method: "DELETE", headers });
     setTasks([]);
   }
 
   function handleScheduled(taskId, scheduledTime) {
     setTasks(prev => prev.map(t => t.id === taskId ? { ...t, scheduledTime } : t));
+  }
+
+  // Still checking auth state
+  if (user === undefined) {
+    return (
+      <div style={{ height: "100vh", display: "flex", alignItems: "center", justifyContent: "center", backgroundColor: "#070b14" }}>
+        <div style={{ color: "#64748b", fontSize: "14px" }}>Loading...</div>
+      </div>
+    );
+  }
+
+  // Not logged in
+  if (!user) {
+    return <Login />;
   }
 
   const counts = {
@@ -161,6 +201,17 @@ export default function App() {
             border: "1px solid rgba(239,68,68,0.2)", cursor: "pointer", transition: "all 0.2s",
           }}>Clear All</button>
         )}
+
+        {/* User avatar + logout */}
+        <div style={{ display: "flex", alignItems: "center", gap: "8px", paddingLeft: "8px", borderLeft: "1px solid rgba(255,255,255,0.08)" }}>
+          {user.photoURL && (
+            <img src={user.photoURL} alt="" style={{ width: "26px", height: "26px", borderRadius: "50%" }} />
+          )}
+          <button onClick={logout} style={{
+            fontSize: "11px", fontWeight: 600, color: "#475569",
+            background: "none", border: "none", cursor: "pointer",
+          }}>Sign out</button>
+        </div>
       </nav>
 
       {/* ── Stat Cards ── */}
@@ -192,7 +243,6 @@ export default function App() {
 
       {/* ── Main Layout ── */}
       <div style={{ display: "flex", flex: 1, overflow: "hidden", minHeight: 0 }}>
-        {/* Chat Sidebar */}
         <div style={{
           width: "400px", flexShrink: 0,
           borderRight: "1px solid rgba(255,255,255,0.06)",
@@ -203,7 +253,6 @@ export default function App() {
           <ChatPanel onExtract={handleExtract} onChat={handleChat} loading={loading} />
         </div>
 
-        {/* Kanban Board */}
         <div style={{ flex: 1, overflow: "auto", padding: "16px 20px" }}>
           {loadingTasks
             ? <LoadingSkeleton />
@@ -218,8 +267,7 @@ export default function App() {
         </div>
       </div>
 
-      {/* Profile Modal */}
-      {showProfile && <ProfilePanel onClose={() => setShowProfile(false)} />}
+      {showProfile && <ProfilePanel onClose={() => setShowProfile(false)} authHeader={authHeader} />}
     </div>
   );
 }
